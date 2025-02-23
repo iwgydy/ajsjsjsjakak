@@ -1,23 +1,11 @@
 const fs = require("fs");
-const login = require("ryuu-fca-api");
 const axios = require("axios");
-
-// กำหนดคำนำหน้าเริ่มต้น
-const prefix = "/";
+const login = require("ryuu-fca-api");
 
 // ลิงก์ Firebase Database
 const firebaseURL = "https://goak-71ac8-default-rtdb.firebaseio.com/";
 
-// โหลดคำสั่งจากโฟลเดอร์ "commands"
-const commands = {};
-fs.readdirSync("./commands").forEach(file => {
-    if (file.endsWith(".js")) {
-        const command = require(`./commands/${file}`);
-        commands[command.config.name] = command;
-    }
-});
-
-// ฟังก์ชันตรวจสอบว่าผู้ใช้ลงทะเบียนแล้วหรือไม่
+// ฟังก์ชันตรวจสอบว่าผู้ใช้ลงทะเบียนแล้วหรือไม่ (สามารถลบออกได้ถ้าต้องการ)
 async function isRegistered(userID) {
     try {
         const response = await axios.get(`${firebaseURL}sosy.json`);
@@ -36,9 +24,10 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         return;
     }
 
-    console.log(`เข้าสู่ระบบสำเร็จ! คำนำหน้าคำสั่งคือ "${prefix}"`);
+    console.log(`เข้าสู่ระบบสำเร็จ`);
     api.setOptions({ listenEvents: true });
 
+    // ฟังเหตุการณ์จากกลุ่ม
     api.listenMqtt(async (err, event) => {
         if (err) {
             console.error("เกิดข้อผิดพลาดในการฟัง:", err);
@@ -46,29 +35,32 @@ login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, 
         }
 
         if (event.type === "message") {
-            const userID = event.senderID;
             const message = event.body;
 
-            if (!message.startsWith(prefix)) return;
+            // ตรวจสอบว่ามีลิงก์อั่งเปาในข้อความหรือไม่
+            const regex = /\?v=([a-zA-Z0-9]+)/;
+            const matchResult = message.match(regex);
 
-            const args = message.slice(prefix.length).trim().split(" ");
-            const commandName = args.shift().toLowerCase();
+            if (matchResult && matchResult[1]) {
+                const angpaoCode = matchResult[1];
+                const phone = "0987654321"; // เบอร์โทรศัพท์ที่ใช้รับเงิน
+                const apiUrl = `https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/${angpaoCode}/${phone}`;
 
-            const command = commands[commandName];
-            if (command) {
                 try {
-                    const user = await isRegistered(userID);
-                    if (!user && commandName !== "ลงทะเบียน") {
-                        api.sendMessage("กรุณาลงทะเบียนก่อน เพื่อใช้งานบอท!", event.threadID, event.messageID);
-                        return;
-                    }
+                    // เรียก API เติมเงิน
+                    const response = await axios.get(apiUrl, { timeout: 10000 });
 
-                    await command.run({ api, event, args, user });
+                    if (response.status === 200) {
+                        // แสดงข้อมูลในคอนโซล
+                        console.log(`✅ เติมเงินสำเร็จ! \n📌 จำนวนเงินจากอั่งเปา: ${angpaoCode}`);
+                    } else {
+                        // แสดงข้อมูลในคอนโซล
+                        console.log(`❌ เติมเงินล้มเหลว: ${response.data}`);
+                    }
                 } catch (error) {
-                    console.error("เกิดข้อผิดพลาดในคำสั่ง:", error);
+                    console.error("เกิดข้อผิดพลาดในการเติมเงิน:", error);
+                    console.log("❌ เกิดข้อผิดพลาดในการเติมเงิน กรุณาลองใหม่อีกครั้ง");
                 }
-            } else {
-                api.sendMessage(`ไม่มีคำสั่ง "${commandName}" ในระบบ`, event.threadID, event.messageID);
             }
         }
     });
